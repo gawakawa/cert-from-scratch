@@ -43,3 +43,53 @@ type SubjectPublicKeyInfo struct {
 	Algorithm AlgorithmIdentifier
 	PublicKey asn1.BitString
 }
+
+func New() *Certificate {
+	signatureAlgorithm := AlgorithmIdentifier{
+		// RSA encryption
+		Algorithm: asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1},
+	}
+
+	// SignatureValue に使うダミー値
+	zeros := make([]byte, 256)
+	bitStringWithZeros := asn1.BitString{
+		Bytes:     zeros,
+		BitLength: len(zeros) * 8,
+	}
+
+	// CommonName
+	name := Name{
+		RDNSequence: []AttributeTypeAndValue{
+			{
+				Type:  asn1.ObjectIdentifier{2, 5, 4, 3},
+				Value: "localhost",
+			},
+		},
+	}
+
+	tbsCertificate := TBSCertificate{
+		Version:      2, // X.509 Ver.3
+		SerialNumber: 1, // この値は同一の CA が発行する証明書で一意になっていればよい
+		Signature:    signatureAlgorithm,
+		Issuer:       name,
+		Validity: Validity{
+			NotBefore: time.Now().UTC(),
+			NotAfter:  time.Now().AddDate(1, 0, 0).UTC(),
+		},
+		Subject: name, // Issuer と Subject が同じなのでいわゆるオレオレ証明書
+		PublicKey: SubjectPublicKeyInfo{
+			Algorithm: signatureAlgorithm,
+			PublicKey: bitStringWithZeros,
+		},
+	}
+
+	return &Certificate{
+		TBSCertificate:     tbsCertificate,
+		SignatureAlgorithm: signatureAlgorithm,
+		SignatureValue:     bitStringWithZeros,
+	}
+}
+
+func (b *Certificate) Marshal() ([]byte, error) {
+	return asn1.Marshal(*b)
+}
