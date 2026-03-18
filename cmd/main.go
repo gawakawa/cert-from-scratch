@@ -5,6 +5,8 @@ import (
 	"os"
 
 	"github.com/gawakawa/cert-from-scratch/basecert"
+	"github.com/gawakawa/cert-from-scratch/privkey"
+	"github.com/gawakawa/cert-from-scratch/selfsigned"
 	"github.com/gawakawa/cert-from-scratch/util"
 )
 
@@ -33,6 +35,35 @@ func main() {
 				os.Args[1],
 			)
 			printUsage()
+			os.Exit(1)
+		}
+	case "selfsigned":
+		if len(os.Args) < 3 {
+			fmt.Fprintf(
+				os.Stderr,
+				"Error: output path prefix required\n",
+			)
+			fmt.Fprintf(
+				os.Stderr,
+				"Usage: %s selfsigned <output-path-prefix>\n",
+				os.Args[0],
+			)
+			os.Exit(1)
+		}
+		prefix := os.Args[2]
+		priv, err := privkey.New(2048)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error generating key: %v\n", err)
+			os.Exit(1)
+		}
+		if err := util.MarshalAndSaveKey(prefix+"-key", priv); err != nil {
+			fmt.Fprintf(os.Stderr, "Error private key: %v\n", err)
+			os.Exit(1)
+		}
+		cert := selfsigned.New(priv)
+		if err := util.MarshalAndSaveCert(prefix+"-cert", cert); err != nil {
+			fmt.Fprintf(os.Stderr,
+				"Error saving certificate: %v\n", err)
 			os.Exit(1)
 		}
 	default:

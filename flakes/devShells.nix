@@ -6,6 +6,7 @@ _: {
         config.ciPackages
         ++ config.pre-commit.settings.enabledPackages
         ++ (with pkgs; [
+          nginx
           openssl_oqs
         ]);
     in
