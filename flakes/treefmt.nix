@@ -10,11 +10,6 @@ _: {
           enable = true;
           includes = [ "*.go" ];
         };
-        golines = {
-          enable = true;
-          maxLength = 70;
-          includes = [ "*.go" ];
-        };
         nixfmt = {
           enable = true;
           includes = [ "*.nix" ];
