@@ -1,0 +1,359 @@
+package certified
+
+import (
+	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/asn1"
+	"math/big"
+	"net"
+	"time"
+
+	"github.com/gawakawa/cert-from-scratch/privkey"
+)
+
+var (
+	oidRSAEncryption = asn1.ObjectIdentifier{
+		1,
+		2,
+		840,
+		113549,
+		1,
+		1,
+		1,
+	}
+	oidSHA256WithRSAEnc = asn1.ObjectIdentifier{
+		1,
+		2,
+		840,
+		113549,
+		1,
+		1,
+		11,
+	}
+	oidCommonName = asn1.ObjectIdentifier{2, 5, 4, 3}
+	// X.509 Extension OIDs
+	oidExtBasicConstraints = asn1.ObjectIdentifier{2, 5, 29, 19}
+	oidExtKeyUsage         = asn1.ObjectIdentifier{2, 5, 29, 15}
+)
+
+type Certificate struct {
+	TBSCertificate     TBSCertificate
+	SignatureAlgorithm AlgorithmIdentifier
+	SignatureValue     asn1.BitString
+}
+
+type TBSCertificate struct {
+	Version      int `asn1:"tag:0,explicit"`
+	SerialNumber int
+	Signature    AlgorithmIdentifier
+	Issuer       Name
+	Validity     Validity
+	Subject      Name
+	PublicKey    SubjectPublicKeyInfo
+	Extensions   []Extension `asn1:"tag:3,explicit,optional,omitempty"`
+}
+
+type AlgorithmIdentifier struct {
+	Algorithm  asn1.ObjectIdentifier
+	Parameters any `asn1:"optional"`
+}
+
+type Name struct {
+	RDNSequence []AttributeTypeAndValue `asn1:"set"`
+}
+
+type AttributeTypeAndValue struct {
+	Type  asn1.ObjectIdentifier
+	Value string
+}
+
+type Validity struct {
+	NotBefore time.Time `asn1:"utc"`
+	NotAfter  time.Time `asn1:"utc"`
+}
+
+type SubjectPublicKeyInfo struct {
+	Algorithm AlgorithmIdentifier
+	PublicKey asn1.BitString
+}
+
+type RSAPublicKey struct {
+	N *big.Int
+	E int
+}
+
+// 拡張フィールド
+type Extension struct {
+	ExtnID    asn1.ObjectIdentifier
+	Critical  bool `asn1:"optional"`
+	ExtnValue []byte
+}
+
+// Basic Constraints 拡張
+// 証明書が CA 証明書であることを示す
+type BasicConstraints struct {
+	CA      bool
+	PathLen int `asn1:"optional"`
+}
+
+// 署名
+func sign(
+	key *privkey.RSAPrivateKey,
+	tbsCertificate *TBSCertificate,
+) *Certificate {
+	encodedTBS, err := asn1.Marshal(*tbsCertificate)
+	if err != nil {
+		panic("failed to marshal TBS certificate: " + err.Error())
+
+	}
+	hashed := sha256.Sum256(encodedTBS)
+	signature, err := key.Sign(hashed[:])
+	if err != nil {
+		panic("failed to sign TBS certificate: " + err.Error())
+	}
+
+	return &Certificate{
+		TBSCertificate:     *tbsCertificate,
+		SignatureAlgorithm: tbsCertificate.Signature,
+		SignatureValue: asn1.BitString{
+			Bytes:     signature,
+			BitLength: len(signature) * 8,
+		},
+	}
+}
+
+func newSubjectPublicKey(pubKey *rsa.PublicKey) *asn1.BitString {
+	encodedPublicKey, err := asn1.Marshal(RSAPublicKey{
+		N: pubKey.N,
+		E: pubKey.E,
+	})
+	if err != nil {
+		panic("failed to marshal public key: " + err.Error())
+	}
+	return &asn1.BitString{
+		Bytes:     encodedPublicKey,
+		BitLength: len(encodedPublicKey) * 8,
+	}
+}
+
+func NewCACertificate(key *privkey.RSAPrivateKey) *Certificate {
+	// CommonName
+	caName := Name{
+		RDNSequence: []AttributeTypeAndValue{
+			{
+				Type:  oidCommonName,
+				Value: "My CA",
+			},
+		},
+	}
+
+	// 公開鍵
+	subjectPublicKeyInfo := SubjectPublicKeyInfo{
+		Algorithm: AlgorithmIdentifier{
+			Algorithm:  oidRSAEncryption,
+			Parameters: asn1.NullRawValue,
+		},
+		PublicKey: *newSubjectPublicKey(key.Public()),
+	}
+
+	// 拡張領域
+	var extensions []Extension
+
+	// Basic Constraints
+	bc := BasicConstraints{
+		CA:      true,
+		PathLen: 0,
+	}
+	encodedBC, err := asn1.Marshal(bc)
+	if err != nil {
+		panic("failed to marshal basic constraints: " + err.Error())
+	}
+	extensions = append(extensions, Extension{
+		ExtnID:    oidExtBasicConstraints,
+		Critical:  true,
+		ExtnValue: encodedBC,
+	})
+
+	// Key Usage
+	// 証明書の用途を示す
+	ku := asn1.BitString{
+		Bytes:     []byte{0b00000110}, // keyCertSign(5), cRLSign(6)
+		BitLength: 7,
+	}
+	encodedKU, err := asn1.Marshal(ku)
+	if err != nil {
+		panic("failed to marshal key usage: " + err.Error())
+	}
+	extensions = append(extensions, Extension{
+		ExtnID:    oidExtKeyUsage,
+		Critical:  true,
+		ExtnValue: encodedKU,
+	})
+
+	tbs := &TBSCertificate{
+		Version:      2,
+		SerialNumber: 1,
+		Signature: AlgorithmIdentifier{
+			Algorithm:  oidSHA256WithRSAEnc,
+			Parameters: asn1.NullRawValue,
+		},
+		Issuer: caName,
+		Validity: Validity{
+			NotBefore: time.Now().UTC(),
+			NotAfter:  time.Now().AddDate(1, 0, 0).UTC(),
+		},
+		Subject:    caName,
+		PublicKey:  subjectPublicKeyInfo,
+		Extensions: extensions,
+	}
+
+	return sign(key, tbs)
+}
+
+func (b *Certificate) Marshal() ([]byte, error) {
+	return asn1.Marshal(*b)
+}
+
+var (
+	oidExtExtendKeyUsage = asn1.ObjectIdentifier{2, 5, 29, 37}
+	oidExtSubjectAltName = asn1.ObjectIdentifier{2, 5, 29, 17}
+	oidServerAuth        = asn1.ObjectIdentifier{
+		1,
+		3,
+		6,
+		1,
+		5,
+		5,
+		7,
+		3,
+		1,
+	}
+)
+
+func NewServerCertificate(
+	key *privkey.RSAPrivateKey,
+	caKey *privkey.RSAPrivateKey,
+	caCert *Certificate,
+) *Certificate {
+	// Issuer
+	issuerName := Name{
+		RDNSequence: []AttributeTypeAndValue{
+			{Type: oidCommonName, Value: "My CA"},
+		},
+	}
+
+	// Subject (Server)
+	subjectName := Name{
+		RDNSequence: []AttributeTypeAndValue{
+			{Type: oidCommonName, Value: "localhost"},
+		},
+	}
+
+	// 公開鍵暗号
+	SubjectPublicKeyInfo := SubjectPublicKeyInfo{
+		Algorithm: AlgorithmIdentifier{
+			Algorithm:  oidRSAEncryption,
+			Parameters: asn1.NullRawValue,
+		},
+		PublicKey: *newSubjectPublicKey(key.Public()),
+	}
+
+	// 拡張領域
+	var extensions []Extension
+
+	// Basic Constraints
+	bc := BasicConstraints{
+		CA: false,
+	}
+	encodedBC, err := asn1.Marshal(bc)
+	if err != nil {
+		panic("failed to marshal basic constraints: " + err.Error())
+	}
+	extensions = append(extensions, Extension{
+		ExtnID:    oidExtBasicConstraints,
+		Critical:  true,
+		ExtnValue: encodedBC,
+	})
+
+	// Key usage
+	ku := asn1.BitString{
+		Bytes: []byte{
+			0b10100000,
+		}, // digitalSignature(0), keyEncipherment(2)
+		BitLength: 3,
+	}
+	encodedKU, err := asn1.Marshal(ku)
+	if err != nil {
+		panic("failed to marshal key usage: " + err.Error())
+	}
+	extensions = append(extensions, Extension{
+		ExtnID:    oidExtKeyUsage,
+		Critical:  true,
+		ExtnValue: encodedKU,
+	})
+
+	// Extended Key Usage
+	eku := []asn1.ObjectIdentifier{
+		oidServerAuth, // serverAuth
+	}
+	encodedEKU, err := asn1.Marshal(eku)
+	if err != nil {
+		panic("failed to marshal extended key usage: " + err.Error())
+	}
+	extensions = append(extensions, Extension{
+		ExtnID:    oidExtExtendKeyUsage,
+		ExtnValue: encodedEKU,
+	})
+
+	// Subject Alternative Name
+	// 証明書の subject の別名を示す
+	lo4 := net.ParseIP("127.0.0.1").To4()
+	if lo4 == nil {
+		panic("failed to parse loopback IPv4 address")
+	}
+
+	lo6 := net.ParseIP("::1").To16()
+	if lo6 == nil {
+		panic("failed to parse loopback IPv6 address")
+	}
+
+	san := struct {
+		DNSName string `asn1:"ia5,tag:2"`
+		IPAddr4 []byte `asn1:"tag:7"`
+		IPAddr6 []byte `asn1:"tag:7"`
+	}{
+		DNSName: "localhost",
+		IPAddr4: lo4,
+		IPAddr6: lo6,
+	}
+	encodedSAN, err := asn1.Marshal(san)
+	if err != nil {
+		panic(
+			"failed to marshal subject alternative name: " + err.Error(),
+		)
+	}
+	extensions = append(extensions, Extension{
+		ExtnID:    oidExtSubjectAltName,
+		Critical:  false,
+		ExtnValue: encodedSAN,
+	})
+
+	tbs := TBSCertificate{
+		Version:      2,
+		SerialNumber: 2,
+		Signature: AlgorithmIdentifier{
+			Algorithm:  oidSHA256WithRSAEnc,
+			Parameters: asn1.NullRawValue,
+		},
+		Issuer: issuerName,
+		Validity: Validity{
+			NotBefore: time.Now().UTC(),
+			NotAfter:  time.Now().AddDate(1, 0, 0).UTC(),
+		},
+		Subject:    subjectName,
+		PublicKey:  SubjectPublicKeyInfo,
+		Extensions: extensions,
+	}
+
+	return sign(caKey, &tbs)
+}

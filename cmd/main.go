@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/gawakawa/cert-from-scratch/basecert"
+	"github.com/gawakawa/cert-from-scratch/certified"
 	"github.com/gawakawa/cert-from-scratch/privkey"
 	"github.com/gawakawa/cert-from-scratch/selfsigned"
 	"github.com/gawakawa/cert-from-scratch/util"
@@ -37,6 +38,7 @@ func main() {
 			printUsage()
 			os.Exit(1)
 		}
+
 	case "selfsigned":
 		if len(os.Args) < 3 {
 			fmt.Fprintf(
@@ -66,6 +68,78 @@ func main() {
 				"Error saving certificate: %v\n", err)
 			os.Exit(1)
 		}
+
+	case "certified":
+		if len(os.Args) < 3 {
+			fmt.Fprintf(
+				os.Stderr,
+				"Error: output path prefix required\n",
+			)
+			fmt.Fprintf(
+				os.Stderr,
+				"Usage: %s certified <output-path-prefix>\n",
+				os.Args[0],
+			)
+			os.Exit(1)
+		}
+		prefix := os.Args[2]
+
+		// CA Certificate
+		caKey, err := privkey.New(2048)
+		if err != nil {
+			fmt.Fprintf(
+				os.Stderr,
+				"Error generating private key: %v\n",
+				err,
+			)
+			os.Exit(1)
+		}
+		// Private key
+		caCert := certified.NewCACertificate(caKey)
+		err = util.MarshalAndSaveCert(prefix+"-cacert", caCert)
+		if err != nil {
+			fmt.Fprintf(
+				os.Stderr,
+				"Error saving CA certificate: %v\n",
+				err,
+			)
+			os.Exit(1)
+		}
+
+		// Server Certificate
+		serverKey, err := privkey.New(2048)
+		if err != nil {
+			fmt.Fprintf(
+				os.Stderr,
+				"Error generating private key: %v\n",
+				err,
+			)
+			os.Exit(1)
+		}
+		err = util.MarshalAndSaveKey(prefix+"-key", serverKey)
+		if err != nil {
+			fmt.Fprintf(
+				os.Stderr,
+				"Error saving private key: %v\n",
+				err,
+			)
+			os.Exit(1)
+		}
+		serverCert := certified.NewServerCertificate(
+			serverKey,
+			caKey,
+			caCert,
+		)
+		err = util.MarshalAndSaveCert(prefix+"-cert", serverCert)
+		if err != nil {
+			fmt.Fprintf(
+				os.Stderr,
+				"Error saving server cert: %v\n",
+				err,
+			)
+			os.Exit(1)
+		}
+
 	default:
 		fmt.Fprintf(
 			os.Stderr,
