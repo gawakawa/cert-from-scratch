@@ -83,3 +83,7 @@ Stop server:
 ```sh
 nginx -c $(pwd)/nginx.conf -p $(pwd)/ -e /dev/stderr -s stop
 ```
+
+## References
+
+- [作って理解する HTTPS 証明書](https://techbookfest.org/product/vu1AyJ6UMHfVzAF0x0aSn0)
